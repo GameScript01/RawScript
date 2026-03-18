@@ -1,0 +1,545 @@
+-- ══════════════════════════════════════════
+--  NEXUS AIM
+-- ══════════════════════════════════════════
+
+local existingGui = game:GetService("CoreGui"):FindFirstChild("NexusAimGui")
+if existingGui then existingGui:Destroy() end
+task.wait(0.05)
+
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local LocalPlayer      = Players.LocalPlayer
+local Camera           = workspace.CurrentCamera
+
+local Settings = {
+    Enabled       = false,
+    ESP           = false,
+    WallCheck     = true,
+    AimPart       = "Head",
+    AimKey        = Enum.KeyCode.Q,
+    CurrentTarget = nil,
+    CircleRadius  = 150,
+}
+
+local function IsVisible(targetPart)
+    if not Settings.WallCheck then return true end
+    local origin    = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local result = workspace:Raycast(origin, direction.Unit * direction.Magnitude, rayParams)
+    return result == nil
+end
+
+local FOVCircle        = Drawing.new("Circle")
+FOVCircle.Thickness    = 1.5
+FOVCircle.Color        = Color3.fromRGB(0, 210, 255)
+FOVCircle.Filled       = false
+FOVCircle.Transparency = 0.8
+FOVCircle.Visible      = false
+
+-- ──────────────────────────────────────────
+--  ESP
+-- ──────────────────────────────────────────
+local ESPObjects = {}
+
+local function MakeESPForPlayer(player)
+    if ESPObjects[player] then return end
+    local lines = {}
+    for i = 1, 4 do
+        local l        = Drawing.new("Line")
+        l.Thickness    = 1.5
+        l.Color        = Color3.fromRGB(255, 60, 60)
+        l.Transparency = 1
+        l.Visible      = false
+        lines[i]       = l
+    end
+    local nameTag        = Drawing.new("Text")
+    nameTag.Size         = 13
+    nameTag.Color        = Color3.fromRGB(255, 255, 255)
+    nameTag.Outline      = true
+    nameTag.OutlineColor = Color3.fromRGB(0, 0, 0)
+    nameTag.Center       = true
+    nameTag.Visible      = false
+    nameTag.Text         = player.Name
+    ESPObjects[player]   = { lines = lines, name = nameTag }
+end
+
+local function RemoveESPForPlayer(player)
+    if not ESPObjects[player] then return end
+    for _, l in ipairs(ESPObjects[player].lines) do l:Remove() end
+    ESPObjects[player].name:Remove()
+    ESPObjects[player] = nil
+end
+
+local function SetESPVisible(player, visible)
+    if not ESPObjects[player] then return end
+    for _, l in ipairs(ESPObjects[player].lines) do l.Visible = visible end
+    ESPObjects[player].name.Visible = visible
+end
+
+local function UpdateESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+
+        if not Settings.ESP then
+            if ESPObjects[player] then SetESPVisible(player, false) end
+            continue
+        end
+
+        local char = player.Character
+        if not char then
+            if ESPObjects[player] then SetESPVisible(player, false) end
+            continue
+        end
+
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
+        if not hrp or not head then
+            if ESPObjects[player] then SetESPVisible(player, false) end
+            continue
+        end
+
+        MakeESPForPlayer(player)
+
+        local rootScreen, rootOnScreen = Camera:WorldToScreenPoint(hrp.Position)
+        local headScreen, headOnScreen = Camera:WorldToScreenPoint(head.Position)
+
+        if not rootOnScreen or not headOnScreen then
+            SetESPVisible(player, false)
+            continue
+        end
+
+        local top    = headScreen.Y - 10
+        local bottom = rootScreen.Y + 14
+        local height = bottom - top
+        local width  = height * 0.5
+        local cx     = rootScreen.X
+        local left   = cx - width / 2
+        local right  = cx + width / 2
+
+        local esp = ESPObjects[player]
+        local visible  = IsVisible(hrp)
+        local boxColor = visible and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 160, 0)
+
+        esp.lines[1].From  = Vector2.new(left,  top)
+        esp.lines[1].To    = Vector2.new(right, top)
+        esp.lines[1].Color = boxColor
+        esp.lines[2].From  = Vector2.new(left,  bottom)
+        esp.lines[2].To    = Vector2.new(right, bottom)
+        esp.lines[2].Color = boxColor
+        esp.lines[3].From  = Vector2.new(left, top)
+        esp.lines[3].To    = Vector2.new(left, bottom)
+        esp.lines[3].Color = boxColor
+        esp.lines[4].From  = Vector2.new(right, top)
+        esp.lines[4].To    = Vector2.new(right, bottom)
+        esp.lines[4].Color = boxColor
+
+        esp.name.Position = Vector2.new(cx, top - 16)
+        esp.name.Text     = player.Name
+
+        SetESPVisible(player, true)
+    end
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    RemoveESPForPlayer(player)
+end)
+
+-- ──────────────────────────────────────────
+--  GUI Root
+-- ──────────────────────────────────────────
+local ScreenGui        = Instance.new("ScreenGui")
+ScreenGui.Name         = "NexusAimGui"
+ScreenGui.Parent       = game:GetService("CoreGui")
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame             = Instance.new("Frame")
+MainFrame.Name              = "MainFrame"
+MainFrame.Parent            = ScreenGui
+MainFrame.BackgroundColor3  = Color3.fromRGB(10, 10, 18)
+MainFrame.BorderSizePixel   = 0
+MainFrame.Position          = UDim2.new(0.78, 0, 0.28, 0)
+MainFrame.Size              = UDim2.new(0, 180, 0, 410)
+MainFrame.Active            = true
+MainFrame.Draggable         = true
+MainFrame.ClipsDescendants  = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+local OuterStroke           = Instance.new("UIStroke")
+OuterStroke.Color           = Color3.fromRGB(0, 210, 255)
+OuterStroke.Thickness       = 1
+OuterStroke.Transparency    = 0.7
+OuterStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+OuterStroke.Parent          = MainFrame
+
+local AccentBar             = Instance.new("Frame")
+AccentBar.Parent            = MainFrame
+AccentBar.BackgroundColor3  = Color3.fromRGB(0, 210, 255)
+AccentBar.BorderSizePixel   = 0
+AccentBar.Size              = UDim2.new(1, 0, 0, 2)
+
+local Header                     = Instance.new("Frame")
+Header.Parent                    = MainFrame
+Header.BackgroundColor3          = Color3.fromRGB(0, 0, 0)
+Header.BackgroundTransparency    = 0.4
+Header.BorderSizePixel           = 0
+Header.Position                  = UDim2.new(0, 0, 0, 2)
+Header.Size                      = UDim2.new(1, 0, 0, 36)
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 4)
+
+local IconDot                = Instance.new("Frame")
+IconDot.Parent               = Header
+IconDot.BackgroundColor3     = Color3.fromRGB(0, 210, 255)
+IconDot.BorderSizePixel      = 0
+IconDot.Position             = UDim2.new(0, 12, 0.5, -5)
+IconDot.Size                 = UDim2.new(0, 10, 0, 10)
+Instance.new("UICorner", IconDot).CornerRadius = UDim.new(1, 0)
+
+local Title                  = Instance.new("TextLabel")
+Title.Parent                 = Header
+Title.Position               = UDim2.new(0, 30, 0, 0)
+Title.Size                   = UDim2.new(1, -30, 0.55, 0)
+Title.BackgroundTransparency = 1
+Title.Text                   = "NEXUS AIM"
+Title.TextColor3             = Color3.fromRGB(220, 240, 255)
+Title.Font                   = Enum.Font.GothamBold
+Title.TextSize               = 13
+Title.TextXAlignment         = Enum.TextXAlignment.Left
+
+local SubTitle               = Instance.new("TextLabel")
+SubTitle.Parent              = Header
+SubTitle.Position            = UDim2.new(0, 30, 0.55, 0)
+SubTitle.Size                = UDim2.new(1, -30, 0.45, 0)
+SubTitle.BackgroundTransparency = 1
+SubTitle.Text                = "v5.0  •  CAM  •  ESP  •  Q"
+SubTitle.TextColor3          = Color3.fromRGB(0, 210, 255)
+SubTitle.Font                = Enum.Font.Gotham
+SubTitle.TextSize            = 9
+SubTitle.TextXAlignment      = Enum.TextXAlignment.Left
+
+local function MakeLabel(posY, txt)
+    local L                  = Instance.new("TextLabel")
+    L.Parent                 = MainFrame
+    L.Position               = UDim2.new(0, 14, 0, posY)
+    L.Size                   = UDim2.new(1, -14, 0, 14)
+    L.BackgroundTransparency = 1
+    L.Text                   = txt
+    L.TextColor3             = Color3.fromRGB(80, 130, 160)
+    L.Font                   = Enum.Font.Gotham
+    L.TextSize               = 9
+    L.TextXAlignment         = Enum.TextXAlignment.Left
+    return L
+end
+
+local function MakeButton(posY, label, accent)
+    accent = accent or Color3.fromRGB(0, 210, 255)
+    local Btn                = Instance.new("TextButton")
+    Btn.Parent               = MainFrame
+    Btn.Position             = UDim2.new(0, 12, 0, posY)
+    Btn.Size                 = UDim2.new(1, -24, 0, 32)
+    Btn.BackgroundColor3     = Color3.fromRGB(16, 16, 28)
+    Btn.BorderSizePixel      = 0
+    Btn.Text                 = ""
+    Btn.AutoButtonColor      = false
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 6)
+
+    local Stroke             = Instance.new("UIStroke")
+    Stroke.Color             = accent
+    Stroke.Thickness         = 1
+    Stroke.Transparency      = 0.6
+    Stroke.Parent            = Btn
+
+    local Lbl                    = Instance.new("TextLabel")
+    Lbl.Parent                   = Btn
+    Lbl.Size                     = UDim2.new(1, 0, 1, 0)
+    Lbl.BackgroundTransparency   = 1
+    Lbl.Text                     = label
+    Lbl.TextColor3               = Color3.fromRGB(200, 230, 255)
+    Lbl.Font                     = Enum.Font.GothamSemibold
+    Lbl.TextSize                 = 11
+
+    Btn.MouseEnter:Connect(function()
+        TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(0, 40, 60)}):Play()
+        Stroke.Transparency = 0
+    end)
+    Btn.MouseLeave:Connect(function()
+        TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(16, 16, 28)}):Play()
+        Stroke.Transparency = 0.6
+    end)
+
+    return Btn, Lbl, Stroke
+end
+
+local StatusRow                  = Instance.new("Frame")
+StatusRow.Parent                 = MainFrame
+StatusRow.BackgroundColor3       = Color3.fromRGB(0, 0, 0)
+StatusRow.BackgroundTransparency = 0.5
+StatusRow.BorderSizePixel        = 0
+StatusRow.Position               = UDim2.new(0, 12, 0, 48)
+StatusRow.Size                   = UDim2.new(1, -24, 0, 26)
+Instance.new("UICorner", StatusRow).CornerRadius = UDim.new(0, 6)
+
+local StatusDot              = Instance.new("Frame")
+StatusDot.Parent             = StatusRow
+StatusDot.BackgroundColor3   = Color3.fromRGB(200, 50, 50)
+StatusDot.BorderSizePixel    = 0
+StatusDot.Position           = UDim2.new(0, 10, 0.5, -5)
+StatusDot.Size               = UDim2.new(0, 10, 0, 10)
+Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
+
+local StatusLabel            = Instance.new("TextLabel")
+StatusLabel.Parent           = StatusRow
+StatusLabel.Position         = UDim2.new(0, 28, 0, 0)
+StatusLabel.Size             = UDim2.new(1, -28, 1, 0)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text             = "DISABLED"
+StatusLabel.TextColor3       = Color3.fromRGB(200, 80, 80)
+StatusLabel.Font             = Enum.Font.GothamBold
+StatusLabel.TextSize         = 10
+StatusLabel.TextXAlignment   = Enum.TextXAlignment.Left
+
+MakeLabel(84, "MASTER SWITCH")
+local ToggleBtn, ToggleLbl, ToggleStroke = MakeButton(98, "DISABLED  [ Q ]")
+
+MakeLabel(141, "PLAYER ESP")
+local EspBtn, EspLbl, EspStroke = MakeButton(155, "ESP: OFF")
+
+MakeLabel(198, "WALL CHECK")
+local WallBtn, WallLbl, WallStroke = MakeButton(212, "WALL CHECK: ON")
+
+MakeLabel(255, "AIM TARGET")
+local PartBtn, PartLbl = MakeButton(269, "TARGET: HEAD")
+
+MakeLabel(312, "FOV RADIUS")
+
+local InputWrap              = Instance.new("Frame")
+InputWrap.Parent             = MainFrame
+InputWrap.Position           = UDim2.new(0, 12, 0, 326)
+InputWrap.Size               = UDim2.new(1, -24, 0, 32)
+InputWrap.BackgroundColor3   = Color3.fromRGB(16, 16, 28)
+InputWrap.BorderSizePixel    = 0
+Instance.new("UICorner", InputWrap).CornerRadius = UDim.new(0, 6)
+
+local IWStroke               = Instance.new("UIStroke")
+IWStroke.Color               = Color3.fromRGB(0, 210, 255)
+IWStroke.Thickness           = 1
+IWStroke.Transparency        = 0.7
+IWStroke.Parent              = InputWrap
+
+local RangeInput             = Instance.new("TextBox")
+RangeInput.Parent            = InputWrap
+RangeInput.Size              = UDim2.new(1, 0, 1, 0)
+RangeInput.BackgroundTransparency = 1
+RangeInput.PlaceholderText   = "FOV Radius (150)"
+RangeInput.PlaceholderColor3 = Color3.fromRGB(60, 90, 110)
+RangeInput.Text              = "150"
+RangeInput.TextColor3        = Color3.fromRGB(0, 210, 255)
+RangeInput.Font              = Enum.Font.GothamSemibold
+RangeInput.TextSize          = 11
+RangeInput.ClearTextOnFocus  = false
+
+RangeInput.Focused:Connect(function() IWStroke.Transparency = 0 end)
+RangeInput.FocusLost:Connect(function()
+    IWStroke.Transparency = 0.7
+    local n = tonumber(RangeInput.Text)
+    if n then Settings.CircleRadius = math.clamp(n, 10, 500) end
+end)
+
+local function UpdateStatus()
+    if Settings.Enabled then
+        TweenService:Create(StatusDot, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(0, 220, 100)}):Play()
+        StatusLabel.Text       = "ACTIVE"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 100)
+        ToggleLbl.Text         = "ENABLED  [ Q ]"
+        ToggleStroke.Color     = Color3.fromRGB(0, 220, 100)
+        FOVCircle.Visible      = true
+    else
+        TweenService:Create(StatusDot, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(200, 50, 50)}):Play()
+        StatusLabel.Text       = "DISABLED"
+        StatusLabel.TextColor3 = Color3.fromRGB(200, 80, 80)
+        ToggleLbl.Text         = "DISABLED  [ Q ]"
+        ToggleStroke.Color     = Color3.fromRGB(0, 210, 255)
+        Settings.CurrentTarget = nil
+        FOVCircle.Visible      = false
+    end
+end
+
+local function UpdateEspBtn()
+    if Settings.ESP then
+        EspLbl.Text        = "ESP: ON"
+        EspStroke.Color    = Color3.fromRGB(0, 220, 100)
+        EspLbl.TextColor3  = Color3.fromRGB(150, 255, 180)
+    else
+        EspLbl.Text        = "ESP: OFF"
+        EspStroke.Color    = Color3.fromRGB(0, 210, 255)
+        EspLbl.TextColor3  = Color3.fromRGB(200, 230, 255)
+        for player, _ in pairs(ESPObjects) do
+            SetESPVisible(player, false)
+        end
+    end
+end
+
+local function UpdateWallBtn()
+    if Settings.WallCheck then
+        WallLbl.Text        = "WALL CHECK: ON"
+        WallStroke.Color    = Color3.fromRGB(0, 220, 100)
+        WallLbl.TextColor3  = Color3.fromRGB(150, 255, 180)
+    else
+        WallLbl.Text        = "WALL CHECK: OFF"
+        WallStroke.Color    = Color3.fromRGB(220, 80, 80)
+        WallLbl.TextColor3  = Color3.fromRGB(255, 150, 150)
+    end
+end
+
+UpdateWallBtn()
+UpdateEspBtn()
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Settings.Enabled = not Settings.Enabled
+    UpdateStatus()
+end)
+
+EspBtn.MouseButton1Click:Connect(function()
+    Settings.ESP = not Settings.ESP
+    UpdateEspBtn()
+end)
+
+WallBtn.MouseButton1Click:Connect(function()
+    Settings.WallCheck     = not Settings.WallCheck
+    Settings.CurrentTarget = nil
+    UpdateWallBtn()
+end)
+
+PartBtn.MouseButton1Click:Connect(function()
+    if Settings.AimPart == "Head" then
+        Settings.AimPart = "HumanoidRootPart"
+        PartLbl.Text = "TARGET: TORSO"
+    else
+        Settings.AimPart = "Head"
+        PartLbl.Text = "TARGET: HEAD"
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Settings.AimKey then
+        Settings.Enabled = not Settings.Enabled
+        UpdateStatus()
+    end
+end)
+
+local function GetClosestToCursor()
+    local closestPlayer = nil
+    local shortestDist  = math.huge
+    local center        = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer
+            and player.Character
+            and player.Character:FindFirstChild(Settings.AimPart)
+            and not (LocalPlayer.Team and player.Team == LocalPlayer.Team)
+        then
+            local part = player.Character[Settings.AimPart]
+            local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
+            if onScreen then
+                local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                if dist <= Settings.CircleRadius and dist < shortestDist and IsVisible(part) then
+                    closestPlayer = player
+                    shortestDist  = dist
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+RunService.RenderStepped:Connect(function()
+    UpdateESP()
+
+    if Settings.Enabled then
+        FOVCircle.Visible  = true
+        FOVCircle.Radius   = Settings.CircleRadius
+        FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+        if Settings.CurrentTarget then
+            local char = Settings.CurrentTarget.Character
+            if not char
+                or not char:FindFirstChild(Settings.AimPart)
+                or not IsVisible(char[Settings.AimPart])
+            then
+                Settings.CurrentTarget = nil
+            end
+        end
+
+        if not Settings.CurrentTarget then
+            Settings.CurrentTarget = GetClosestToCursor()
+        end
+
+        if Settings.CurrentTarget then
+            local char = Settings.CurrentTarget.Character
+            if char and char:FindFirstChild(Settings.AimPart) then
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, char[Settings.AimPart].Position)
+            end
+        end
+    else
+        FOVCircle.Visible = false
+    end
+end)
+
+-- ──────────────────────────────────────────
+--  Close Button
+-- ──────────────────────────────────────────
+local CloseDivider = Instance.new("Frame")
+CloseDivider.Parent                  = MainFrame
+CloseDivider.BackgroundColor3        = Color3.fromRGB(0, 210, 255)
+CloseDivider.BackgroundTransparency  = 0.8
+CloseDivider.BorderSizePixel         = 0
+CloseDivider.Position                = UDim2.new(0, 12, 0, 368)
+CloseDivider.Size                    = UDim2.new(1, -24, 0, 1)
+
+local CloseBtn                = Instance.new("TextButton")
+CloseBtn.Parent               = MainFrame
+CloseBtn.Position             = UDim2.new(0, 12, 0, 377)
+CloseBtn.Size                 = UDim2.new(1, -24, 0, 24)
+CloseBtn.BackgroundColor3     = Color3.fromRGB(28, 8, 8)
+CloseBtn.BorderSizePixel      = 0
+CloseBtn.Text                 = ""
+CloseBtn.AutoButtonColor      = false
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+local CloseStroke             = Instance.new("UIStroke")
+CloseStroke.Color             = Color3.fromRGB(200, 50, 50)
+CloseStroke.Thickness         = 1
+CloseStroke.Transparency      = 0.4
+CloseStroke.Parent            = CloseBtn
+
+local CloseLbl                = Instance.new("TextLabel")
+CloseLbl.Parent               = CloseBtn
+CloseLbl.Size                 = UDim2.new(1, 0, 1, 0)
+CloseLbl.BackgroundTransparency = 1
+CloseLbl.Text                 = "✕  CLOSE"
+CloseLbl.TextColor3           = Color3.fromRGB(255, 100, 100)
+CloseLbl.Font                 = Enum.Font.GothamBold
+CloseLbl.TextSize             = 11
+
+CloseBtn.MouseEnter:Connect(function()
+    TweenService:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(180, 30, 30)}):Play()
+    CloseStroke.Transparency = 0
+end)
+CloseBtn.MouseLeave:Connect(function()
+    TweenService:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(28, 8, 8)}):Play()
+    CloseStroke.Transparency = 0.4
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    Settings.Enabled = false
+    Settings.ESP     = false
+    FOVCircle.Visible = false
+    for player, _ in pairs(ESPObjects) do
+        RemoveESPForPlayer(player)
+    end
+    ScreenGui:Destroy()
+end)
